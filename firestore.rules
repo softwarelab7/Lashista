@@ -1,0 +1,11 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /fichas/{document=**} {
+      // Anyone can create (clients filling the form)
+      allow create: if true;
+      // Only read and update if authenticated (admin)
+      allow read, update, delete: if request.auth != null;
+    }
+  }
+}

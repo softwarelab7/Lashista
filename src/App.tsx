@@ -8,7 +8,8 @@ import eyelashImage from './assets/images/banner.jpg';
 import flowersImage from './assets/images/flowers.png';
 import { exportToExcel } from './utils/excelExport';
 import { signInWithPopup, signOut, onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
-import { auth, googleProvider } from './firebase';
+import { collection, doc, setDoc, onSnapshot, query, orderBy, getDocs } from 'firebase/firestore';
+import { auth, googleProvider, db } from './firebase';
 
 // Reusable components
 const FloralDecoration = ({ className }: { className?: string }) => (
@@ -94,6 +95,8 @@ export default function App() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [successPhase, setSuccessPhase] = useState<'fase1' | 'fase2' | null>(null);
   const [errorMsg, setErrorMsg] = useState('');
+  const [generatedPdfUri, setGeneratedPdfUri] = useState<string | null>(null);
+  const [generatedPdfName, setGeneratedPdfName] = useState<string>('');
   
   // Google Authentication & Approved Admin Accounts State
   const [user, setUser] = useState<FirebaseUser | null>(null);
@@ -103,8 +106,8 @@ export default function App() {
 
   // Lista estricta y segura de correos de Google autorizados para acceder al Panel
   const AUTHORIZED_ADMIN_EMAILS = [
-    'erikajohanalozano@gmail.com',
-    'nortivystore@gmail.com'
+    'lozanoerika72@gmail.com',
+    'hectorguti95@gmail.com'
   ];
 
   const isAdminUnlocked = !!(user && user.email && AUTHORIZED_ADMIN_EMAILS.some(e => e.toLowerCase() === user.email?.toLowerCase()));
@@ -117,15 +120,21 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // Store all client records in state and sync with localStorage
-  const [fichas, setFichas] = useState<FormData[]>(() => {
-    try {
-      const saved = localStorage.getItem('lashista_fichas_store');
-      return saved ? JSON.parse(saved) : [];
-    } catch (e) {
-      return [];
+  // Store all client records in state and sync with Firestore
+  const [fichas, setFichas] = useState<FormData[]>([]);
+
+  // Listen to Firestore for fichas data (only when user is admin)
+  useEffect(() => {
+    if (isAdminUnlocked) {
+      const q = query(collection(db, 'fichas'));
+      const unsubscribe = onSnapshot(q, (snapshot) => {
+        const fichasData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as FormData));
+        // Sort manually by date if needed, or just set it
+        setFichas(fichasData.sort((a, b) => new Date(b.fechaCreacion || 0).getTime() - new Date(a.fechaCreacion || 0).getTime()));
+      });
+      return () => unsubscribe();
     }
-  });
+  }, [isAdminUnlocked]);
 
   const [formData, setFormData] = useState<FormData>(initialFormData);
   const [activeFichaId, setActiveFichaId] = useState<string | null>(null);
@@ -158,7 +167,7 @@ export default function App() {
       } else {
         await signOut(auth);
         setUser(null);
-        setAuthError(`⛔ Acceso Denegado: El correo (${loggedEmail}) no está autorizado para acceder al panel.`);
+        setAuthError(`⛔ Acceso Denegado: Tu cuenta no tiene permisos para ver las fichas.`);
       }
     } catch (err: any) {
       console.error("Error en Google Sign In:", err);
@@ -168,30 +177,14 @@ export default function App() {
     }
   };
 
-  const handleAddCurrentEmailToApproved = () => {
-    if (user && user.email) {
-      const newEmail = user.email.toLowerCase();
-      if (!approvedEmails.includes(newEmail)) {
-        setApprovedEmails(prev => [...prev, newEmail]);
-        setShowAuthModal(false);
-        setViewMode('admin');
-      }
-    }
-  };
-
   const handleLogout = async () => {
     await signOut(auth);
     setUser(null);
+    setFichas([]); // Clear fichas on logout
     startNewForm();
   };
 
-  useEffect(() => {
-    try {
-      localStorage.setItem('lashista_fichas_store', JSON.stringify(fichas));
-    } catch (e) {
-      console.error("Error saving to localStorage", e);
-    }
-  }, [fichas]);
+
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
     const { name, value, type } = e.target;
@@ -217,6 +210,8 @@ export default function App() {
     setActiveFichaId(null);
     setSuccessPhase(null);
     setErrorMsg('');
+    setGeneratedPdfUri(null);
+    setGeneratedPdfName('');
     sigClientRef.current?.clear();
     sigProfRef.current?.clear();
     setViewMode('clienta');
@@ -226,15 +221,20 @@ export default function App() {
   const generateAndDownloadPDF = async (filename: string): Promise<string | null> => {
     if (!formRef.current) return null;
     try {
-      const canvas = await html2canvas(formRef.current, { scale: 2, useCORS: true });
-      const imgData = canvas.toDataURL('image/jpeg', 0.98);
+      window.scrollTo(0, 0); // Help render properly
+      const canvas = await html2canvas(formRef.current, { backgroundColor: '#ffffff', scale: 1 });
+      const imgData = canvas.toDataURL('image/jpeg', 0.95);
       const pdf = new jsPDF('p', 'mm', 'a4');
       const pdfWidth = pdf.internal.pageSize.getWidth();
       const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
       pdf.addImage(imgData, 'JPEG', 0, 0, pdfWidth, pdfHeight);
       
-      // Save locally
-      pdf.save(filename);
+      // Save locally (might fail in restricted iframes)
+      try {
+        pdf.save(filename);
+      } catch (e) {
+        console.warn("Could not save PDF locally:", e);
+      }
 
       // Return base64 string for Drive upload
       return pdf.output('datauristring');
@@ -255,11 +255,14 @@ export default function App() {
       if (res.ok) {
         const data = await res.json();
         return data.webViewLink || data.webContentLink || null;
+      } else {
+        const errorData = await res.json().catch(() => null);
+        throw new Error(errorData?.error || "Error al subir PDF a Drive");
       }
-    } catch (e) {
+    } catch (e: any) {
       console.log("Servidor sin credenciales de Drive activas:", e);
+      throw e;
     }
-    return null;
   };
 
   // Submit to Google Sheets via server endpoint
@@ -267,11 +270,11 @@ export default function App() {
     const rowData = [
       ficha.id,
       ficha.estado === 'completada' ? 'Completada' : 'Pendiente de Profesional',
-      ficha.fechaCreacion || ficha.fecha,
+      ficha.fechaCreacion || new Date().toISOString().split('T')[0],
       ficha.nombreCompleto,
       ficha.telefono,
       ficha.edad,
-      ficha.fecha,
+      ficha.fechaNacimiento,
       [ficha.servicioExtensiones ? 'Extensiones' : '', ficha.servicioLifting ? 'Lifting' : ''].filter(Boolean).join(', '),
       ficha.alergia,
       ficha.alergia === 'Si' ? ficha.alergiaCual : '',
@@ -308,14 +311,24 @@ export default function App() {
     ];
 
     try {
-      await fetch('/api/submit-form', {
+      const res = await fetch('/api/submit-form', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ rowData }),
       });
-    } catch (e) {
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => null);
+        throw new Error(errorData?.error || "Error al conectar con el servidor para Sheets");
+      }
+    } catch (e: any) {
       console.log("No se pudo conectar a Google Sheets server:", e);
+      throw e;
     }
+  };
+
+  const handleError = (msg: string) => {
+    setErrorMsg(msg);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   // Submit Handler for Client (Phase 1)
@@ -323,15 +336,15 @@ export default function App() {
     e.preventDefault();
     setErrorMsg('');
 
-    if (!formData.nombreCompleto.trim()) return setErrorMsg("El nombre completo es obligatorio.");
-    if (!formData.telefono.trim()) return setErrorMsg("El teléfono es obligatorio.");
-    if (!formData.autorizacion) return setErrorMsg("Debes autorizar el consentimiento informado.");
-    if (sigClientRef.current?.isEmpty()) return setErrorMsg("La firma de la clienta es obligatoria.");
+    if (!formData.nombreCompleto.trim()) return handleError("El nombre completo es obligatorio.");
+    if (!formData.telefono.trim()) return handleError("El teléfono es obligatorio.");
+    if (!formData.autorizacion) return handleError("Debes autorizar el consentimiento informado.");
+    if (sigClientRef.current?.isEmpty()) return handleError("La firma de la clienta es obligatoria.");
 
     setIsSubmitting(true);
 
     try {
-      const clientSig = sigClientRef.current?.getTrimmedCanvas().toDataURL('image/png') || '';
+      const clientSig = sigClientRef.current?.getCanvas().toDataURL('image/png') || '';
       const fichaId = formData.id || `FCH-${Math.floor(1000 + Math.random() * 9000)}`;
       const fechaActual = new Date().toLocaleDateString() + ' ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
@@ -342,7 +355,7 @@ export default function App() {
         estado: 'pendiente_profesional',
         firmaClienta: clientSig,
         nombreFirmaClienta: formData.nombreFirmaClienta || formData.nombreCompleto,
-        fechaFirmaClienta: formData.fechaFirmaClienta || formData.fecha
+        fechaFirmaClienta: formData.fechaFirmaClienta || new Date().toISOString().split('T')[0]
       };
 
       setFormData(updatedData);
@@ -351,6 +364,11 @@ export default function App() {
       const filename = `Fase1_Consentimiento_${updatedData.nombreCompleto.replace(/\s+/g, '_')}_${fichaId}.pdf`;
       const pdfBase64 = await generateAndDownloadPDF(filename);
 
+      if (pdfBase64) {
+        setGeneratedPdfUri(pdfBase64);
+        setGeneratedPdfName(filename);
+      }
+
       let driveUrl: string | null = null;
       if (pdfBase64) {
         driveUrl = await uploadPdfToDrive(pdfBase64, filename);
@@ -358,8 +376,8 @@ export default function App() {
 
       const finalFicha = { ...updatedData, pdfFase1Url: driveUrl || '' };
 
-      // Update state & localStorage
-      setFichas(prev => [finalFicha, ...prev.filter(f => f.id !== fichaId)]);
+      // Save to Firestore
+      await setDoc(doc(db, 'fichas', finalFicha.id), finalFicha);
       
       // Sync to Google Sheets
       await submitToGoogleSheets(finalFicha);
@@ -367,25 +385,30 @@ export default function App() {
       // Create event in Google Calendar
       try {
         const servicioStr = [finalFicha.servicioExtensiones ? 'Extensiones' : '', finalFicha.servicioLifting ? 'Lifting' : ''].filter(Boolean).join(', ');
-        await fetch('/api/create-calendar-event', {
+        const calRes = await fetch('/api/create-calendar-event', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             nombreCompleto: finalFicha.nombreCompleto,
             telefono: finalFicha.telefono,
-            fecha: finalFicha.fecha,
+            fecha: finalFicha.fechaFirmaClienta,
             servicio: servicioStr,
             fichaId: finalFicha.id
           })
         });
-      } catch (calErr) {
+        if (!calRes.ok) {
+           const calErrorData = await calRes.json().catch(() => null);
+           throw new Error(calErrorData?.error || "Error al conectar con Google Calendar");
+        }
+      } catch (calErr: any) {
         console.log("Aviso de calendario:", calErr);
+        throw calErr;
       }
 
       setSuccessPhase('fase1');
       window.scrollTo(0, 0);
     } catch (err: any) {
-      setErrorMsg("Error procesando la Fase 1: " + err.message);
+      handleError("Error procesando la Fase 1: " + err.message);
     } finally {
       setIsSubmitting(false);
     }
@@ -397,13 +420,13 @@ export default function App() {
     setErrorMsg('');
 
     if (sigProfRef.current?.isEmpty()) {
-      return setErrorMsg("La firma de la profesional es obligatoria para completar la ficha.");
+      return handleError("La firma de la profesional es obligatoria para completar la ficha.");
     }
 
     setIsSubmitting(true);
 
     try {
-      const profSig = sigProfRef.current?.getTrimmedCanvas().toDataURL('image/png') || '';
+      const profSig = sigProfRef.current?.getCanvas().toDataURL('image/png') || '';
       
       const updatedData: FormData = {
         ...formData,
@@ -418,6 +441,11 @@ export default function App() {
       const filename = `Ficha_Completa_${updatedData.nombreCompleto.replace(/\s+/g, '_')}_${updatedData.id}.pdf`;
       const pdfBase64 = await generateAndDownloadPDF(filename);
 
+      if (pdfBase64) {
+        setGeneratedPdfUri(pdfBase64);
+        setGeneratedPdfName(filename);
+      }
+
       let driveUrl: string | null = null;
       if (pdfBase64) {
         driveUrl = await uploadPdfToDrive(pdfBase64, filename);
@@ -425,8 +453,10 @@ export default function App() {
 
       const finalFicha = { ...updatedData, pdfFase2Url: driveUrl || '' };
 
-      // Update state & localStorage
-      setFichas(prev => prev.map(f => f.id === finalFicha.id ? finalFicha : f));
+      // Save to Firestore
+      if (finalFicha.id) {
+        await setDoc(doc(db, 'fichas', finalFicha.id), finalFicha);
+      }
 
       // Sync to Google Sheets
       await submitToGoogleSheets(finalFicha);
@@ -434,7 +464,7 @@ export default function App() {
       setSuccessPhase('fase2');
       window.scrollTo(0, 0);
     } catch (err: any) {
-      setErrorMsg("Error completando la Fase 2: " + err.message);
+      handleError("Error completando la Fase 2: " + err.message);
     } finally {
       setIsSubmitting(false);
     }
@@ -489,7 +519,7 @@ export default function App() {
           >
             <ShieldCheck className="w-3.5 h-3.5" />
             <span>{isAdminUnlocked ? 'Panel Lashista' : '🔒 Acceso Lashista'}</span>
-            {fichas.filter(f => f.estado === 'pendiente_profesional').length > 0 && (
+            {isAdminUnlocked && fichas.filter(f => f.estado === 'pendiente_profesional').length > 0 && (
               <span className="bg-amber-400 text-gray-900 font-bold px-1.5 py-0.2 rounded-full text-[10px]">
                 {fichas.filter(f => f.estado === 'pendiente_profesional').length}
               </span>
@@ -568,7 +598,7 @@ export default function App() {
       <FloralDecoration className="fixed bottom-0 right-0 w-64 md:w-96 h-auto text-[#8B6FA8] opacity-60 pointer-events-none transform translate-x-10 translate-y-10 z-0" />
 
       {/* ADMIN PANEL TABLE VIEW */}
-      {viewMode === 'admin' && !activeFichaId && (
+      {viewMode === 'admin' && isAdminUnlocked && !activeFichaId && (
         <div className="max-w-[1100px] w-full p-4 md:p-8 z-20">
           <div className="bg-white rounded-2xl shadow-xl border border-purple-100 p-6 mb-8">
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6 pb-4 border-b border-gray-100">
@@ -634,7 +664,7 @@ export default function App() {
                         <td className="py-3.5 px-4 font-mono font-bold text-[#8B6FA8]">{f.id}</td>
                         <td className="py-3.5 px-4 font-medium text-gray-800">{f.nombreCompleto}</td>
                         <td className="py-3.5 px-4 text-gray-600">{f.telefono}</td>
-                        <td className="py-3.5 px-4 text-gray-600">{f.fecha}</td>
+                        <td className="py-3.5 px-4 text-gray-600">{f.fechaFirmaClienta}</td>
                         <td className="py-3.5 px-4">
                           {f.estado === 'completada' ? (
                             <span className="bg-emerald-100 text-emerald-800 px-2.5 py-1 rounded-full text-[10px] font-bold inline-flex items-center gap-1">
@@ -696,8 +726,18 @@ export default function App() {
             </div>
 
             <div className="flex flex-col gap-3">
+              {generatedPdfUri && (
+                <a
+                  href={generatedPdfUri}
+                  download={generatedPdfName}
+                  className="w-full bg-[#8B6FA8] text-white py-3 rounded-xl hover:bg-[#735A8E] transition-all font-medium text-sm shadow-md flex items-center justify-center gap-2"
+                >
+                  <Download className="w-5 h-5" />
+                  Descargar PDF Manualmente
+                </a>
+              )}
               <a
-                href={`https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent('✨ Cita Pestañas - ' + formData.nombreCompleto)}&details=${encodeURIComponent('Cita de Pestañas en Lashista Studio (Erika Johana Lozano). Código Ficha: ' + formData.id)}&dates=${(formData.fecha || '').replace(/-/g, '')}/${(formData.fecha || '').replace(/-/g, '')}`}
+                href={`https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent('✨ Cita Pestañas - ' + formData.nombreCompleto)}&details=${encodeURIComponent('Cita de Pestañas en Lashista Studio (Erika Johana Lozano). Código Ficha: ' + formData.id)}&dates=${(formData.fechaFirmaClienta || '').replace(/-/g, '')}/${(formData.fechaFirmaClienta || '').replace(/-/g, '')}`}
                 target="_blank"
                 rel="noreferrer"
                 className="w-full bg-emerald-600 text-white py-3 rounded-xl hover:bg-emerald-700 transition-all font-medium text-sm shadow-md flex items-center justify-center gap-2"
@@ -713,7 +753,7 @@ export default function App() {
                 Llenar otra ficha de clienta
               </button>
               <button 
-                onClick={() => setViewMode('admin')}
+                onClick={handleAdminAccess}
                 className="w-full bg-gray-100 text-gray-700 py-3 rounded-xl hover:bg-gray-200 transition-all font-medium text-sm"
               >
                 Ir al Panel de la Lashista
@@ -738,12 +778,24 @@ export default function App() {
               </p>
             </div>
 
-            <button 
-              onClick={() => { setSuccessPhase(null); setViewMode('admin'); setActiveFichaId(null); }}
-              className="w-full bg-[#634b79] text-white py-3 rounded-xl hover:bg-[#4d395e] transition-all font-medium text-sm shadow-md"
-            >
-              Volver al Panel de Fichas
-            </button>
+            <div className="flex flex-col gap-3">
+              {generatedPdfUri && (
+                <a
+                  href={generatedPdfUri}
+                  download={generatedPdfName}
+                  className="w-full bg-emerald-600 text-white py-3 rounded-xl hover:bg-emerald-700 transition-all font-medium text-sm shadow-md flex items-center justify-center gap-2"
+                >
+                  <Download className="w-5 h-5" />
+                  Descargar PDF Manualmente
+                </a>
+              )}
+              <button 
+                onClick={() => { setSuccessPhase(null); setViewMode('admin'); setActiveFichaId(null); setGeneratedPdfUri(null); }}
+                className="w-full bg-[#634b79] text-white py-3 rounded-xl hover:bg-[#4d395e] transition-all font-medium text-sm shadow-md"
+              >
+                Volver al Panel de Fichas
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -830,7 +882,7 @@ export default function App() {
                   <PaperInput label="Nombre completo:" name="nombreCompleto" value={formData.nombreCompleto} onChange={handleChange} disabled={!!activeFichaId} />
                   <PaperInput label="Teléfono / WhatsApp:" name="telefono" value={formData.telefono} onChange={handleChange} type="tel" disabled={!!activeFichaId} />
                   <PaperInput label="Edad:" name="edad" value={formData.edad} onChange={handleChange} type="number" disabled={!!activeFichaId} />
-                  <PaperInput label="Fecha:" name="fecha" value={formData.fecha} onChange={handleChange} type="date" disabled={!!activeFichaId} />
+                  <PaperInput label="Fecha de nacimiento:" name="fechaNacimiento" value={formData.fechaNacimiento} onChange={handleChange} type="date" disabled={!!activeFichaId} />
                   
                   <div className="pt-2">
                     <p className="text-sm text-gray-700 mb-2">Servicio que desea:</p>
@@ -943,7 +995,7 @@ export default function App() {
                         <div className="space-y-4 pt-4 md:pt-0 flex flex-col justify-end">
                            <PaperInput label="Nombre:" name="nombreFirmaClienta" value={formData.nombreFirmaClienta || formData.nombreCompleto} onChange={handleChange} disabled={!!activeFichaId} />
                            <PaperInput label="Documento:" name="documentoFirmaClienta" value={formData.documentoFirmaClienta} onChange={handleChange} disabled={!!activeFichaId} />
-                           <PaperInput label="Fecha:" name="fechaFirmaClienta" value={formData.fechaFirmaClienta || formData.fecha} onChange={handleChange} type="date" disabled={!!activeFichaId} />
+                           <PaperInput label="Fecha de la cita:" name="fechaFirmaClienta" value={formData.fechaFirmaClienta} onChange={handleChange} type="date" disabled={!!activeFichaId} />
                         </div>
                      </div>
                   </div>

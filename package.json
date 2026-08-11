@@ -19,6 +19,7 @@
     "express": "^4.21.2",
     "firebase": "^12.17.1",
     "googleapis": "^174.0.1",
+    "html-to-image": "^1.11.13",
     "html2canvas": "^1.4.1",
     "jspdf": "^4.2.1",
     "lucide-react": "^0.546.0",

@@ -1,11 +1,12 @@
 {
-  "projectId": "gen-lang-client-0880943598",
-  "appId": "1:356855850295:web:d3387097e8ef88e2de26b2",
-  "apiKey": "AIzaSyD9pOVAJbpjLOb_OkI9DPJlZKSc2XFjas8",
-  "authDomain": "gen-lang-client-0880943598.firebaseapp.com",
-  "storageBucket": "gen-lang-client-0880943598.firebasestorage.app",
-  "messagingSenderId": "356855850295",
+  "projectId": "vocal-metrics-56shk",
+  "appId": "1:327063178281:web:e0b1f52e9e6c04aa636038",
+  "apiKey": "AIzaSyABCFxwq0seJr3BFM2hlUaW_D31U06Awhs",
+  "authDomain": "vocal-metrics-56shk.firebaseapp.com",
+  "firestoreDatabaseId": "ai-studio-lashista-189aa77d-b56a-470b-9bfe-8d463f4ee297",
+  "storageBucket": "vocal-metrics-56shk.firebasestorage.app",
+  "messagingSenderId": "327063178281",
   "measurementId": "",
-  "oAuthClientId": "356855850295-2r437699a7ui7jo76tpvbbvqsp7npe8m.apps.googleusercontent.com",
+  "oAuthClientId": "327063178281-9v9pa3fd3em44us41fnguhsl3cfkebog.apps.googleusercontent.com",
   "recaptchaSiteKey": ""
 }

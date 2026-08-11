@@ -10,6 +10,7 @@ export interface FormData {
   nombreCompleto: string;
   telefono: string;
   edad: string;
+  fechaNacimiento: string;
   fecha: string;
   servicioExtensiones: boolean;
   servicioLifting: boolean;
@@ -65,6 +66,7 @@ export const initialFormData: FormData = {
   nombreCompleto: '',
   telefono: '',
   edad: '',
+  fechaNacimiento: '',
   fecha: new Date().toISOString().split('T')[0],
   servicioExtensiones: false,
   servicioLifting: false,

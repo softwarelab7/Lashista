@@ -17,7 +17,25 @@ async function startServer() {
       return null;
     }
 
-    const formattedKey = GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n');
+    let formattedKey = GOOGLE_PRIVATE_KEY;
+    
+    try {
+      const parsed = JSON.parse(formattedKey);
+      if (parsed.private_key) {
+        formattedKey = parsed.private_key;
+      }
+    } catch(e) {}
+
+    if (formattedKey.startsWith('"') && formattedKey.endsWith('"')) {
+      formattedKey = formattedKey.slice(1, -1);
+    }
+    
+    formattedKey = formattedKey.replace(/\\n/g, '\n');
+
+    if (!formattedKey.includes('-----BEGIN PRIVATE KEY-----')) {
+      // If headers are missing, assume it's just the base64 payload
+      formattedKey = `-----BEGIN PRIVATE KEY-----\n${formattedKey.trim()}\n-----END PRIVATE KEY-----\n`;
+    }
 
     return new google.auth.GoogleAuth({
       credentials: {

@@ -1,6 +1,6 @@
 {
-  "name": "",
-  "description": "",
+  "name": "Lashista - Ficha de Cliente",
+  "description": "Ficha de cliente y consentimiento informado para extensiones y lifting de pestañas.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
